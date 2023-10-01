@@ -2,7 +2,6 @@ import torch
 import itertools
 from typing import List, Tuple, Union, Dict, Any, Optional
 from transformers import AutoTokenizer
-from collections import defaultdict
 from tst_modules import PromptedGenerator, TextStyleTransferOutputSelector
 from rlprompt.rewards.base_reward import BaseReward, SUPPORTED_LEFT_TO_RIGHT_LMS
 
@@ -63,19 +62,25 @@ class PromptedTextStyleTransferReward(BaseReward):
             mode: str
     ) -> Tuple[Union[List[float], torch.Tensor], Dict[str, Any]]:
 
+        def _repeat_texts(
+                texts: List[str],
+                num_repeats: Optional[int] = None
+        ) -> List[str]:
+            if num_repeats is None:
+                num_repeats = self.num_repeats
+            return list(itertools.chain(*[[s for _ in range(num_repeats)]
+                                          for s in texts]))
+
         if mode == 'train':
-            source_strs = self._repeat_texts(source_texts)
-            target_labels = self._repeat_texts(target_labels)
+            source_strs = _repeat_texts(source_texts)
+            target_labels = _repeat_texts(target_labels)
         else:  # mode == "infer":
             source_strs = source_texts
 
         prompt_strings = self.get_prompt_strings_from_output_tokens(output_tokens)
 
-        for i, (prompt, src, label) in enumerate(zip(prompt_strings,
-                                                     source_strs,
-                                                     target_labels)):
-            reward = self.compute_reward(prompt, src, label)
-            self.rewards_per_batch.append(reward)
+        rewards = self.compute_rewards(prompt_strings, source_strs, target_labels)
+        self.rewards_per_batch.extend(rewards)
 
         rewards_tensor = torch.stack(self.rewards_per_batch)
 
@@ -85,39 +90,7 @@ class PromptedTextStyleTransferReward(BaseReward):
 
         return rewards_tensor, dict()
 
-    def _boostrap_max_rewards_k_times(
-            self,
-            rewards: List[float],
-            k: int
-    ) -> List[float]:
-        # Segment list rewards into k equal sub-lists
-        l = len(rewards)
-        assert l % k == 0, f'l={l}, k={k}'
-        segmented_rewards = [rewards[i * l // k:(i + 1) * l // k]
-                             for i in range(k)]  # [k, l/k]
-        # We use different rewards for each bootstrap for now
-        bootstrap_rewards = segmented_rewards
-
-        # For each sub-list, take the max as the sub-reward
-        values, indices = (torch.tensor(bootstrap_rewards)
-                           .float().max(axis=1))
-        # Take numbers from the original list to avoid numerical issues
-        bootstrap_max_rewards = [bootstrap_rewards[i][index]
-                                 for i, index in enumerate(indices)]
-
-        return bootstrap_max_rewards
-
-    def _repeat_texts(
-            self,
-            texts: List[str],
-            num_repeats: Optional[int] = None
-    ) -> List[str]:
-        if num_repeats is None:
-            num_repeats = self.num_repeats
-        return list(itertools.chain(*[[s for _ in range(num_repeats)]
-                                      for s in texts]))
-
-    def compute_reward(self, prompt, src, label):
+    def compute_rewards(self, prompts, source_strings, labels):
 
         def log_metrics():
             # Take the max of the sub-list rewards to print as example
@@ -144,22 +117,49 @@ class PromptedTextStyleTransferReward(BaseReward):
                   '# Explored Tokens', num_tokens_explored
                   )
 
+        def _boostrap_max_rewards_k_times(
+                rewards: List[float],
+                k: int
+        ) -> List[float]:
+            # Segment list rewards into k equal sub-lists
+            l = len(rewards)
+            assert l % k == 0, f'l={l}, k={k}'
+            segmented_rewards = \
+                [rewards[i * l // k:(i + 1) * l // k] for i in range(k)]  # [k, l/k]
+            # We use different rewards for each bootstrap for now
+            bootstrap_rewards = segmented_rewards
+
+            # For each sub-list, take the max as the sub-reward
+            values, indices = (torch.tensor(bootstrap_rewards).float().max(axis=1))
+            # Take numbers from the original list to avoid numerical issues
+            bootstrap_max_rewards = [bootstrap_rewards[i][index] for i, index in enumerate(indices)]
+
+            return bootstrap_max_rewards
+
         n_reward = self.num_samples
         k_reward = self.num_bootstraps
         num_samples = n_reward * k_reward
 
-        hypos = self._generator.sample_generate(prompt, src, num_samples, self.top_k, self.top_p)
-        sum_rewards, content_scores, style_probs = self.selector.compute_sample_rewards(src, hypos, label)
+        rewards = []
+        for _, (prompt, src, label) in enumerate(zip(prompts,
+                                                     source_strings,
+                                                     labels)):
+            hypos = self._generator.sample_generate(prompt, src, num_samples, self.top_k, self.top_p)
+            sum_rewards, content_scores, style_probs = \
+                self.selector.compute_sample_rewards(src, hypos, label)
 
-        # Bootstrap the max reward for k times and average
-        bootstrap_max_rewards: List[float] = self._boostrap_max_rewards_k_times(sum_rewards, k_reward)
+            # Bootstrap the max reward for k times and average
+            bootstrap_max_rewards: List[float] = \
+                _boostrap_max_rewards_k_times(sum_rewards, k_reward)
 
-        # Keep track of each input's max rewards to compute z-score
-        self.input_rewards_per_batch[src] += bootstrap_max_rewards
+            # Keep track of each input's max rewards to compute z-score
+            self.input_rewards_per_batch[src] += bootstrap_max_rewards
 
-        # Average boostrap max rewards as the final reward
-        reward = torch.Tensor(bootstrap_max_rewards).float().mean()
+            # Average boostrap max rewards as the final reward
+            reward = torch.Tensor(bootstrap_max_rewards).float().mean()
 
-        log_metrics()
+            log_metrics()
 
-        return reward
+            rewards.append(reward)
+
+        return rewards
