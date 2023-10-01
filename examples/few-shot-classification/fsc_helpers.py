@@ -24,7 +24,7 @@ class PromptedClassificationDataset(Dataset):
 
     def __getitem__(self, idx):
         item = {'source_texts': self.source_texts[idx],
-                'class_labels': self.class_labels[idx]}
+                'target_labels': self.class_labels[idx]}
         return item
 
 
