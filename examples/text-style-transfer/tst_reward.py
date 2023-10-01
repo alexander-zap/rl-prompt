@@ -1,16 +1,10 @@
 import torch
-import numpy as np
 import itertools
 from typing import List, Tuple, Union, Dict, Any, Optional
 from transformers import AutoTokenizer
 from collections import defaultdict
 from tst_modules import PromptedGenerator, TextStyleTransferOutputSelector
-
-from rlprompt.rewards import BaseReward
-
-# Magic variable
-SUPPORTED_LMS = ['distilgpt2', 'gpt2', 'gpt2-medium',
-                 'gpt2-large', 'gpt2-xl']
+from rlprompt.rewards.base_reward import BaseReward, SUPPORTED_LEFT_TO_RIGHT_LMS
 
 
 class PromptedTextStyleTransferReward(BaseReward):
@@ -32,7 +26,7 @@ class PromptedTextStyleTransferReward(BaseReward):
             end_punct: str,  # End punctuation to cut off after generation
     ):
 
-        assert task_lm in SUPPORTED_LMS
+        assert task_lm in SUPPORTED_LEFT_TO_RIGHT_LMS
 
         print('Task LM:', task_lm)
 
@@ -62,12 +56,12 @@ class PromptedTextStyleTransferReward(BaseReward):
         self.tokens_explored = set()
 
     def forward(
-        self,
-        source_texts: List[str],
-        target_labels: List[str],
-        output_tokens: List[List[str]],
-        to_tensor: bool,
-        mode: str
+            self,
+            source_texts: List[str],
+            target_labels: List[str],
+            output_tokens: List[List[str]],
+            to_tensor: bool,
+            mode: str
     ) -> Tuple[Union[List[float], torch.Tensor], Dict[str, Any]]:
 
         if mode == 'train':
@@ -76,8 +70,7 @@ class PromptedTextStyleTransferReward(BaseReward):
         elif mode == "infer":
             source_strs = source_texts
 
-        prompt_tokens = output_tokens
-        prompt_strings = self._convert_tokens_to_string(prompt_tokens)
+        prompt_strings = self.calculcate_prompt_strings(output_tokens)
 
         n_reward = self.num_samples
         k_reward = self.num_bootstraps
@@ -108,19 +101,17 @@ class PromptedTextStyleTransferReward(BaseReward):
             top_index = sum_rewards.index(max_reward)
 
             # Log relevant quantities
+            # mean content
             content = torch.tensor(content_scores).float().mean()
+            # mean style
             prob = torch.tensor(style_probs).float().mean()
             mean_reward = torch.tensor(sum_rewards).float().mean()
             top_content = torch.tensor(content_scores[top_index]).float()
+            # top style
             top_prob = torch.tensor(style_probs[top_index]).float()
-            quantities_to_log['mean_content'].append(content)
-            quantities_to_log['mean_style'].append(prob)
-            quantities_to_log["sum_reward"].append(reward)
-            quantities_to_log["mean_reward"].append(mean_reward)
-            quantities_to_log["top_content"].append(top_content)
-            quantities_to_log["top_style"].append(top_prob)
 
-            print(self._counter, '|', prompt_tokens[i], '|',
+
+            print(self._counter, '|', output_tokens[i], '|',
                   prompt, '|', src, '|', hypos[top_index], '|',
                   'Top Content:', round(top_content.item(), 2), '|',
                   'Top Style:', round(top_prob.item(), 2), '|',
@@ -135,13 +126,11 @@ class PromptedTextStyleTransferReward(BaseReward):
                                                          input_rewards)
 
         self.tokens_explored = \
-            self.tokens_explored.union(*[set(p) for p in prompt_tokens])
-        quantities_to_log["num_tokens_explored"].append(
-            torch.tensor(len(self.tokens_explored)).float())
+            self.tokens_explored.union(*[set(p) for p in output_tokens])
 
-        rewards_log = dict(
-            (reward_key, torch.stack(reward_vals, dim=0).mean())
-            for reward_key, reward_vals in quantities_to_log.items())
+        num_tokens_explored = torch.tensor(len(self.tokens_explored)).float()
+
+        rewards_log = dict()
 
         return rewards_tensor, rewards_log
 
@@ -176,3 +165,4 @@ class PromptedTextStyleTransferReward(BaseReward):
             num_repeats = self.num_repeats
         return list(itertools.chain(*[[s for _ in range(num_repeats)]
                                       for s in texts]))
+

@@ -3,11 +3,7 @@ import numpy as np
 from transformers import AutoTokenizer, AutoModelForMaskedLM, GPT2LMHeadModel
 from typing import List, Dict, Optional, Tuple, Union, Any
 from collections import defaultdict
-from rlprompt.rewards import BaseReward
-
-SUPPORTED_LEFT_TO_RIGHT_LMS = ['distilgpt2', 'gpt2', 'gpt2-medium',
-                               'gpt2-large', 'gpt2-xl']
-SUPPORTED_MASK_LMS = ['distilroberta-base', 'roberta-base', 'roberta-large']
+from rlprompt.rewards.base_reward import BaseReward, SUPPORTED_LEFT_TO_RIGHT_LMS, SUPPORTED_MASK_LMS
 
 
 class PromptedClassificationReward(BaseReward):
@@ -74,22 +70,20 @@ class PromptedClassificationReward(BaseReward):
         return template
 
     def forward(
-        self,
-        source_texts: List[str],
-        class_labels: List[int],
-        output_tokens: List[List[str]],
-        to_tensor: bool,
-        mode: str
+            self,
+            source_texts: List[str],
+            class_labels: List[int],
+            output_tokens: List[List[str]],
+            to_tensor: bool,
+            mode: str
     ) -> Tuple[Union[List[float], torch.Tensor], Dict[str, Any]]:
 
-        # Process prompts and verbalizer indices
-        prompt_tokens = output_tokens
-        prompt_strings = self._convert_tokens_to_string(prompt_tokens)
+        prompt_strings = self.calculcate_prompt_strings(output_tokens)
+
         batch_size = len(source_texts)
 
         rewards: List[torch.Tensor] = []
         input_rewards: Dict[str, List[float]] = defaultdict(list)
-        quantities_to_log: Dict[str, List[torch.Tensor]] = defaultdict(list)
         for i, prompt in enumerate(prompt_strings):
             # Compute LM logits
             current_prompts = [prompt for _ in source_texts]
@@ -119,13 +113,6 @@ class PromptedClassificationReward(BaseReward):
 
             # Log quantities such as accuracy and class-wise reward
             acc = correct.float().mean()
-            quantities_to_log['acc'] = acc
-            for c in range(self.num_classes):
-                class_idx = np.array(class_labels) == c
-                class_rewards = gap_rewards[class_idx]
-                quantities_to_log[f"gap_reward_class_{c}"].append(
-                    class_rewards.mean().item())
-            quantities_to_log['gap_reward'].append(reward.item())
             rewards.append(reward)
 
             # keep track of rewards for z-score normalization
@@ -152,17 +139,13 @@ class PromptedClassificationReward(BaseReward):
             # 'z' because not source strings
             rewards_tensor = self.compute_reward_zscores(rewards_tensor=rewards_tensor,
                                                          input_texts=['z'], input_rewards=input_rewards)
-            for i in range(rewards_tensor.size(0)):
-                quantities_to_log['resized_reward'].append(
-                    rewards_tensor[i].item())
+
         elif mode == 'infer':  # Optional: Predict Val Prompts
             score = rewards_tensor.mean().item()
             print('Our Prompt:')
             print(prompt_strings, score)
 
-        rewards_log = dict(
-            (reward_key, torch.mean(torch.tensor(reward_vals)))
-            for reward_key, reward_vals in quantities_to_log.items())
+        rewards_log = dict()
 
         return rewards_tensor, rewards_log
 
@@ -205,7 +188,6 @@ class PromptedClassificationReward(BaseReward):
             out_logits = token_logits[range(batch_size), input_lengths - 1, :]
 
         return out_logits
-
 
     def _format_prompts(
             self,

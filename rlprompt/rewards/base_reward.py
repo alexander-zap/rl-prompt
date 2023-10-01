@@ -2,6 +2,11 @@ from typing import Tuple, Union, List, Dict, Any
 import torch
 import numpy as np
 
+# Hardcoded
+SUPPORTED_LEFT_TO_RIGHT_LMS = ['distilgpt2', 'gpt2', 'gpt2-medium',
+                               'gpt2-large', 'gpt2-xl']
+SUPPORTED_MASK_LMS = ['distilroberta-base', 'roberta-base', 'roberta-large']
+
 
 class BaseReward:
     _tokenizer: Any
@@ -67,6 +72,22 @@ class BaseReward:
         # print(idx_stds)
         return (rewards_tensor - idx_means.float()) / (idx_stds.float() + eps)
 
-    def _convert_tokens_to_string(self, tokens: List[List[str]]) -> List[str]:
-        return [self._tokenizer.convert_tokens_to_string(s)
-                for s in tokens]
+    def calculcate_prompt_strings(self, output_tokens):
+        """
+        Process prompts and verbalizer indices
+
+        Args:
+            output_tokens ():
+
+        Returns:
+            prompt_strings
+
+        """
+
+        def _convert_tokens_to_string(tokens: List[List[str]]) -> List[str]:
+            return [self._tokenizer.convert_tokens_to_string(s)
+                    for s in tokens]
+
+        prompt_tokens = output_tokens
+        prompt_strings = _convert_tokens_to_string(prompt_tokens)
+        return prompt_strings
