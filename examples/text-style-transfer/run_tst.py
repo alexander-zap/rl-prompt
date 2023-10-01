@@ -44,7 +44,7 @@ def main(config: "DictConfig"):
 
     config.save_dir = os.path.join(output_dir, config.save_dir)
     trainer = make_trainer(algo_module, train_dataset, val_dataset, config)
-    trainer.train(config=config)
+    trainer.train(config=config, report_to_wandb=False)
 
 
 if __name__ == "__main__":

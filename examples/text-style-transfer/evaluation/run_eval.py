@@ -40,7 +40,7 @@ def main(config: "DictConfig"):
         raise ValueError('Need to supply at least one prompt')
     output_dir = get_hydra_output_dir()
 
-    device_id = 0
+    device_id = "cpu"  # TODO
     generator = PromptedGenerator(config.task_lm, config.template, 
                                   config.end_punct, config.pad_token, 
                                   device_id, config.lower_outputs, 

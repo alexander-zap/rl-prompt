@@ -128,7 +128,7 @@ class PromptedClassificationEvaluator:
             # Get labels
             predicted_labels = torch.argmax(class_probs, dim=-1)
             label_agreement = torch.where(
-                targets.cuda() == predicted_labels, 1, 0)
+                targets == predicted_labels, 1, 0)
             # Compute accuracy
             correct_sum += label_agreement.sum()
         accuracy = correct_sum/num_of_examples

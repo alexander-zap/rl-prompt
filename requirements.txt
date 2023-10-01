@@ -5,3 +5,5 @@ typing
 wandb
 transformers
 hydra-core==1.2.0
+bert-score
+sacrebleu

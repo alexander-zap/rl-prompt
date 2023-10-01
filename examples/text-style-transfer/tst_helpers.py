@@ -46,7 +46,7 @@ def load_text_style_transfer_test_data(config: "DictConfig"):
             config.dataset_seed, config.base_path, None, 
             None, None)
     elif config.dataset == 'shakespeare': # Opposite test data are references
-        target_label = int(config.direction[1])
+        target_label = int(config.direction[-1])
         ref_texts, _ = load_text_style_transfer_dataset(
             config.dataset, target_label, 'test',
             config.dataset_seed, config.base_path, None,

@@ -3,11 +3,11 @@ defaults:
   - base_eval
   - _self_
 # Data
-dataset: "???"
-dataset_seed: null
+dataset: "<ENTER_DATASET_NAME_HERE>"
+dataset_seed: 0
 base_path: "../data"
 # Evaluation
-prompt_0_to_1: null
+prompt_0_to_1: "<ENTER_PROMPT_HERE>"
 prompt_1_to_0: null
 # Reward
 task_lm: "distilgpt2"

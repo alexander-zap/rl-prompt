@@ -43,7 +43,7 @@ class LMAdaptorModel(BaseModel):
 
         assert policy_lm in SUPPORTED_LMS  # TODO: Support more LMs
         model = policy_lm
-        self.device = 0  # TODO
+        self.device = "cpu"  # TODO
         self.tokenizer = AutoTokenizer.from_pretrained(
             model,
             pad_token='<|endoftext|>')

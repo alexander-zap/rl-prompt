@@ -33,8 +33,8 @@ class PromptedTextStyleTransferReward(BaseReward):
         template: str,  # Template for prompt generation
         end_punct: str,  # End punctuation to cut off after generation
     ):
-        generator_device = 0  # TODO
-        reward_device = 0  # TODO
+        generator_device = "cpu"  # TODO
+        reward_device = "cpu"  # TODO
 
         # Loading generator model
         assert task_lm in SUPPORTED_LMS

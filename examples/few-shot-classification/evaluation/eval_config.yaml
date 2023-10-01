@@ -2,9 +2,9 @@
 # Data
 num_shots: 16
 base_path: "../data"
-dataset: "???"
+dataset: "<ENTER_DATASET_NAME_HERE>"
 dataset_seed: 0
 # Reward
 task_lm: "roberta-large"
 is_mask_lm: null
-prompt: "???"
+prompt: "<ENTER_PROMPT_HERE>"
