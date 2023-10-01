@@ -29,7 +29,7 @@ class TextStyleTransferOutputSelector:
         source_text: str, 
         generated_texts: List[str], 
         target_label: str
-    ) -> Tuple[List[float]]: 
+    ) -> Tuple[List[float], List[float], List[float]]:
         srcs = [source_text for _ in generated_texts]
         hypos = generated_texts
 
