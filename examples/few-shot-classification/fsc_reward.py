@@ -78,76 +78,33 @@ class PromptedClassificationReward(BaseReward):
             mode: str
     ) -> Tuple[Union[List[float], torch.Tensor], Dict[str, Any]]:
 
-        prompt_strings = self.calculcate_prompt_strings(output_tokens)
+        prompt_strings = self.get_prompt_strings_from_output_tokens(output_tokens)
 
         batch_size = len(source_texts)
 
-        rewards: List[torch.Tensor] = []
-        input_rewards: Dict[str, List[float]] = defaultdict(list)
         for i, prompt in enumerate(prompt_strings):
-            # Compute LM logits
-            current_prompts = [prompt for _ in source_texts]
-            formatted_templates = self._format_prompts(source_texts,
-                                                       current_prompts)
-            all_logits = self._get_logits(formatted_templates)
-            # [batch_size, vocab_size]
-            class_probs = torch.softmax(all_logits[:, self.verbalizer_ids], -1)
-            # [batch_size, num_classes]
+            reward = self.compute_reward(prompt=prompt, source_texts=source_texts,
+                                         class_labels=class_labels, batch_size=batch_size)
 
-            # Get label and maximum not-label probabilities
-            label_probs = class_probs[range(batch_size), class_labels]
-            # [batch_size, 1]
-            not_label_probs = torch.where(
-                class_probs == label_probs.unsqueeze(1),
-                torch.Tensor([-1]).to(self.device), class_probs)
-            # [batch_size, num_classes]
-            max_not_label_probs, _ = torch.max(not_label_probs, -1)
-            # [batch_size, 1]
-
-            # Compute piecewise gap reward
-            gap = (label_probs - max_not_label_probs)
-            correct = (gap > 0).long()
-            gap_rewards = gap * (self.correct_coeff * correct \
-                                 + self.incorrect_coeff * (1 - correct))
-            reward = gap_rewards.mean().detach()
-
-            # Log quantities such as accuracy and class-wise reward
-            acc = correct.float().mean()
-            rewards.append(reward)
+            self.rewards_per_batch.append(reward)
 
             # keep track of rewards for z-score normalization
-            input_rewards['z'] += [reward.item()]
+            self.input_rewards_per_batch['z'] += [reward.item()]
 
-            # Print examples
-            print_strs = [self._counter, '|', prompt, '\n']
-            for c in range(self.num_classes):
-                class_example_idx = np.where(np.array(class_labels) == c)[0][0]
-                class_example = formatted_templates[class_example_idx]
-                class_example_probs = class_probs[class_example_idx, :].tolist()
-                class_example_probs = [round(prob, 2) \
-                                       for prob in class_example_probs]
-                print_strs += ['Class', c, 'Example:',
-                               class_example, '|',
-                               'Probs:', class_example_probs, '\n']
-            print_strs += ['Accuracy:', acc.item(), '|',
-                           'Reward:', round(reward.item(), 2)]
-            print(*print_strs)
-        rewards_tensor = torch.stack(rewards)
+        rewards_tensor = torch.stack(self.rewards_per_batch)
 
         # z-score normalization (2nd stage)
         if mode == 'train' and self.compute_zscore:
             # 'z' because not source strings
             rewards_tensor = self.compute_reward_zscores(rewards_tensor=rewards_tensor,
-                                                         input_texts=['z'], input_rewards=input_rewards)
+                                                         input_texts=['z'])
 
         elif mode == 'infer':  # Optional: Predict Val Prompts
             score = rewards_tensor.mean().item()
             print('Our Prompt:')
             print(prompt_strings, score)
 
-        rewards_log = dict()
-
-        return rewards_tensor, rewards_log
+        return rewards_tensor, dict()
 
     # Adapted from
     # https://huggingface.co/docs/transformers/v4.21.1/en/task_summary#masked-language-modeling
@@ -196,3 +153,49 @@ class PromptedClassificationReward(BaseReward):
     ) -> List[str]:
         return [self.template.format(sentence_1=s_1, prompt=p)
                 for s_1, p in zip(source_strs, prompt_strs)]
+
+    def compute_reward(self, prompt, source_texts, class_labels, batch_size):
+        # Compute LM logits
+        current_prompts = [_ for _ in source_texts]
+        formatted_templates = self._format_prompts(source_texts,
+                                                   current_prompts)
+        all_logits = self._get_logits(formatted_templates)
+        # [batch_size, vocab_size]
+        class_probs = torch.softmax(all_logits[:, self.verbalizer_ids], -1)
+        # [batch_size, num_classes]
+
+        # Get label and maximum not-label probabilities
+        label_probs = class_probs[range(batch_size), class_labels]
+        # [batch_size, 1]
+        not_label_probs = torch.where(
+            class_probs == label_probs.unsqueeze(1),
+            torch.Tensor([-1]).to(self.device), class_probs)
+        # [batch_size, num_classes]
+        max_not_label_probs, _ = torch.max(not_label_probs, -1)
+        # [batch_size, 1]
+
+        # Compute piecewise gap reward
+        gap = (label_probs - max_not_label_probs)
+        correct = (gap > 0).long()
+        gap_rewards = gap * (self.correct_coeff * correct + self.incorrect_coeff * (1 - correct))
+        reward = gap_rewards.mean().detach()
+
+        # Log quantities such as accuracy and class-wise reward
+        acc = correct.float().mean()
+
+        # Print examples
+        print_strs = [self._counter, '|', prompt, '\n']
+        for c in range(self.num_classes):
+            class_example_idx = np.where(np.array(class_labels) == c)[0][0]
+            class_example = formatted_templates[class_example_idx]
+            class_example_probs = class_probs[class_example_idx, :].tolist()
+            class_example_probs = [round(prob, 2) \
+                                   for prob in class_example_probs]
+            print_strs += ['Class', c, 'Example:',
+                           class_example, '|',
+                           'Probs:', class_example_probs, '\n']
+        print_strs += ['Accuracy:', acc.item(), '|',
+                       'Reward:', round(reward.item(), 2)]
+        print(*print_strs)
+
+        return reward

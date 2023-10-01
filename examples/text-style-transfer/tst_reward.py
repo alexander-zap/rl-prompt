@@ -30,18 +30,13 @@ class PromptedTextStyleTransferReward(BaseReward):
 
         print('Task LM:', task_lm)
 
-        super().__init__(compute_zscore=compute_zscore)
+        super().__init__(compute_zscore)
 
         # Loading generator model
         self._tokenizer = AutoTokenizer.from_pretrained(task_lm)
         self._generator = PromptedGenerator(task_lm, template, end_punct,
                                             pad_token, self.device,
                                             lower_outputs, control_output_length)
-
-        self.top_k = task_top_k
-        self.top_p = 1.0
-        self.num_samples = num_samples
-        self.num_bootstraps = num_bootstraps
 
         # Loading reward models
         if style_tokenizer is None:
@@ -51,9 +46,13 @@ class PromptedTextStyleTransferReward(BaseReward):
                                                         style_batch_size,
                                                         self.device)
 
+        self.top_k = task_top_k
+        self.top_p = 1.0
+        self.num_samples = num_samples
+        self.num_bootstraps = num_bootstraps
+
         # Misc. training details
         self.num_repeats = num_repeats
-        self.tokens_explored = set()
 
     def forward(
             self,
@@ -67,72 +66,24 @@ class PromptedTextStyleTransferReward(BaseReward):
         if mode == 'train':
             source_strs = self._repeat_texts(source_texts)
             target_labels = self._repeat_texts(target_labels)
-        elif mode == "infer":
+        else:  # mode == "infer":
             source_strs = source_texts
 
-        prompt_strings = self.calculcate_prompt_strings(output_tokens)
+        prompt_strings = self.get_prompt_strings_from_output_tokens(output_tokens)
 
-        n_reward = self.num_samples
-        k_reward = self.num_bootstraps
-        N = n_reward * k_reward
-
-        rewards: List[torch.Tensor] = []
-        input_rewards: Dict[str, List[float]] = defaultdict(list)
-        quantities_to_log: Dict[str, List[torch.Tensor]] = defaultdict(list)
         for i, (prompt, src, label) in enumerate(zip(prompt_strings,
                                                      source_strs,
                                                      target_labels)):
-            hypos = self._generator.sample_generate(prompt, src, N,
-                                                    self.top_k, self.top_p)
-            sum_rewards, content_scores, style_probs = \
-                self.selector.compute_sample_rewards(src, hypos, label)
+            reward = self.compute_reward(prompt, src, label)
+            self.rewards_per_batch.append(reward)
 
-            # Bootstrap the max reward for k times and average
-            bootstrap_max_rewards: List[float] = \
-                self._boostrap_max_rewards_k_times(sum_rewards, k_reward)
-            # Average boostrap max rewards as the final reward
-            reward = torch.Tensor(bootstrap_max_rewards).float().mean()
+        rewards_tensor = torch.stack(self.rewards_per_batch)
 
-            # Keep track of each input's max rewards to compute z-score
-            input_rewards[src] += bootstrap_max_rewards
-
-            # Take the max of the sub-list rewards to print as example
-            max_reward = max(bootstrap_max_rewards)
-            top_index = sum_rewards.index(max_reward)
-
-            # Log relevant quantities
-            # mean content
-            content = torch.tensor(content_scores).float().mean()
-            # mean style
-            prob = torch.tensor(style_probs).float().mean()
-            mean_reward = torch.tensor(sum_rewards).float().mean()
-            top_content = torch.tensor(content_scores[top_index]).float()
-            # top style
-            top_prob = torch.tensor(style_probs[top_index]).float()
-
-
-            print(self._counter, '|', output_tokens[i], '|',
-                  prompt, '|', src, '|', hypos[top_index], '|',
-                  'Top Content:', round(top_content.item(), 2), '|',
-                  'Top Style:', round(top_prob.item(), 2), '|',
-                  'Top Reward:', round(max_reward, 2), '|',
-                  'Reward:', round(reward.item(), 2))
-            rewards.append(reward)
-
-        rewards_tensor = torch.stack(rewards)
         if mode == "train" and self.compute_zscore:
             rewards_tensor = self.compute_reward_zscores(rewards_tensor,
-                                                         source_strs,
-                                                         input_rewards)
+                                                         source_strs)
 
-        self.tokens_explored = \
-            self.tokens_explored.union(*[set(p) for p in output_tokens])
-
-        num_tokens_explored = torch.tensor(len(self.tokens_explored)).float()
-
-        rewards_log = dict()
-
-        return rewards_tensor, rewards_log
+        return rewards_tensor, dict()
 
     def _boostrap_max_rewards_k_times(
             self,
@@ -166,3 +117,49 @@ class PromptedTextStyleTransferReward(BaseReward):
         return list(itertools.chain(*[[s for _ in range(num_repeats)]
                                       for s in texts]))
 
+    def compute_reward(self, prompt, src, label):
+
+        def log_metrics():
+            # Take the max of the sub-list rewards to print as example
+            mean_reward = torch.tensor(sum_rewards).float().mean()
+            max_reward = max(bootstrap_max_rewards)
+            top_index = sum_rewards.index(max_reward)
+            mean_content = torch.tensor(content_scores).float().mean()
+            top_content = torch.tensor(content_scores[top_index]).float()
+            mean_style = torch.tensor(style_probs).float().mean()
+            top_style = torch.tensor(style_probs[top_index]).float()
+            num_tokens_explored = torch.tensor(len(self.tokens_explored)).float()
+
+            print(self._counter, '|',
+                  prompt, '|',
+                  src, '|',
+                  hypos[top_index], '|',
+                  'Mean Content:', round(mean_content.item(), 2), '|',
+                  'Mean Style:', round(mean_style.item(), 2), '|',
+                  'Mean Reward:', round(mean_reward.item(), 2), '|',
+                  'Top Content:', round(top_content.item(), 2), '|',
+                  'Top Style:', round(top_style.item(), 2), '|',
+                  'Top Reward:', round(max_reward, 2), '|',
+                  'Reward:', round(reward.item(), 2), '|',
+                  '# Explored Tokens', num_tokens_explored
+                  )
+
+        n_reward = self.num_samples
+        k_reward = self.num_bootstraps
+        num_samples = n_reward * k_reward
+
+        hypos = self._generator.sample_generate(prompt, src, num_samples, self.top_k, self.top_p)
+        sum_rewards, content_scores, style_probs = self.selector.compute_sample_rewards(src, hypos, label)
+
+        # Bootstrap the max reward for k times and average
+        bootstrap_max_rewards: List[float] = self._boostrap_max_rewards_k_times(sum_rewards, k_reward)
+
+        # Keep track of each input's max rewards to compute z-score
+        self.input_rewards_per_batch[src] += bootstrap_max_rewards
+
+        # Average boostrap max rewards as the final reward
+        reward = torch.Tensor(bootstrap_max_rewards).float().mean()
+
+        log_metrics()
+
+        return reward
