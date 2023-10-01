@@ -12,43 +12,46 @@ SUPPORTED_MASK_LMS = ['distilroberta-base', 'roberta-base', 'roberta-large']
 
 class PromptedClassificationReward(BaseReward):
     def __init__(
-        self,
-        task_lm: str,
-        is_mask_lm: Optional[bool],
-        compute_zscore: bool,
-        incorrect_coeff: float, # lambda_1 in paper
-        correct_coeff: float, # lambda_2 in paper
-        num_classes: int,
-        verbalizers: List[str],
-        template: Optional[str]
+            self,
+            task_lm: str,
+            is_mask_lm: Optional[bool],
+            compute_zscore: bool,
+            incorrect_coeff: float,  # lambda_1 in paper
+            correct_coeff: float,  # lambda_2 in paper
+            num_classes: int,
+            verbalizers: List[str],
+            template: Optional[str]
     ):
-        super().__init__()
-        self.device = torch.device("cuda" if torch.cuda.is_available()
-                                   else "cpu")
-        self.task_lm = task_lm
-        if is_mask_lm is None: 
+
+        if is_mask_lm is None:
             # If False, then treat as left-to-right LM
-            self.is_mask_lm = True if 'bert' in self.task_lm else False
+            self.is_mask_lm = True if 'bert' in task_lm else False
         else:
-            self.is_mask_lm = is_mask_lm  
-        print('Task LM:', self.task_lm)
+            self.is_mask_lm = is_mask_lm
+
         if self.is_mask_lm:
-            assert self.task_lm in SUPPORTED_MASK_LMS
-            self._tokenizer = AutoTokenizer.from_pretrained(self.task_lm)
+            assert task_lm in SUPPORTED_MASK_LMS
+        else:
+            assert task_lm in SUPPORTED_LEFT_TO_RIGHT_LMS
+
+        print('Task LM:', task_lm)
+
+        super().__init__(compute_zscore)
+
+        # Loading generator model
+        if self.is_mask_lm:
+            self._tokenizer = AutoTokenizer.from_pretrained(task_lm)
             self._generator = (AutoModelForMaskedLM
-                               .from_pretrained(self.task_lm)
+                               .from_pretrained(task_lm)
                                .to(self.device))
         else:
-            assert self.task_lm in SUPPORTED_LEFT_TO_RIGHT_LMS
             self._tokenizer = AutoTokenizer.from_pretrained(
-                self.task_lm, pad_token='<|endoftext|>')
+                task_lm, pad_token='<|endoftext|>')
             self._generator = (GPT2LMHeadModel
-                               .from_pretrained(self.task_lm)
+                               .from_pretrained(task_lm)
                                .to(self.device))
             self._generator.config.pad_token_id = self._tokenizer.pad_token_id
 
-
-        self.compute_zscore = compute_zscore
         self.incorrect_coeff = incorrect_coeff
         self.correct_coeff = correct_coeff
         self.num_classes = num_classes
@@ -58,9 +61,8 @@ class PromptedClassificationReward(BaseReward):
                                for v in self.verbalizers]
         if template is None:
             self.template = self.load_default_template()  # prompt templates
-        else: 
+        else:
             self.template = template
-        self._counter = 0
 
     def load_default_template(self) -> str:
         if self.is_mask_lm:
@@ -79,10 +81,6 @@ class PromptedClassificationReward(BaseReward):
         to_tensor: bool,
         mode: str
     ) -> Tuple[Union[List[float], torch.Tensor], Dict[str, Any]]:
-        assert mode in ["train", "infer"]
-        
-        if mode == "train":
-            self._counter += 1
 
         # Process prompts and verbalizer indices
         prompt_tokens = output_tokens
@@ -141,7 +139,7 @@ class PromptedClassificationReward(BaseReward):
                 class_example_probs = class_probs[class_example_idx, :].tolist()
                 class_example_probs = [round(prob, 2) \
                                        for prob in class_example_probs]
-                print_strs += ['Class', c, 'Example:', 
+                print_strs += ['Class', c, 'Example:',
                                class_example, '|',
                                'Probs:', class_example_probs, '\n']
             print_strs += ['Accuracy:', acc.item(), '|',
@@ -151,14 +149,9 @@ class PromptedClassificationReward(BaseReward):
 
         # z-score normalization (2nd stage)
         if mode == 'train' and self.compute_zscore:
-            input_reward_means = {k: np.mean(v)
-                                  for k, v in input_rewards.items()}
-            input_reward_stds = {k: np.std(v)
-                                 for k, v in input_rewards.items()}
-            # not source strings
-            idx_means = torch.tensor(input_reward_means['z']).float()
-            idx_stds = torch.tensor(input_reward_stds['z']).float()
-            rewards_tensor = (rewards_tensor - idx_means)/(idx_stds + 1e-4)
+            # 'z' because not source strings
+            rewards_tensor = self.compute_reward_zscores(rewards_tensor=rewards_tensor,
+                                                         input_texts=['z'], input_rewards=input_rewards)
             for i in range(rewards_tensor.size(0)):
                 quantities_to_log['resized_reward'].append(
                     rewards_tensor[i].item())
@@ -171,10 +164,7 @@ class PromptedClassificationReward(BaseReward):
             (reward_key, torch.mean(torch.tensor(reward_vals)))
             for reward_key, reward_vals in quantities_to_log.items())
 
-        if to_tensor is True:
-            return rewards_tensor, rewards_log
-        else:
-            return rewards_tensor.tolist(), rewards_log
+        return rewards_tensor, rewards_log
 
     # Adapted from
     # https://huggingface.co/docs/transformers/v4.21.1/en/task_summary#masked-language-modeling
@@ -184,8 +174,8 @@ class PromptedClassificationReward(BaseReward):
         return mask_token_index
 
     def ensure_exactly_one_mask_token(
-        self,
-        model_inputs: Dict[str, torch.Tensor]
+            self,
+            model_inputs: Dict[str, torch.Tensor]
     ) -> None:
         for input_ids in model_inputs["input_ids"]:
             masked_index = self._get_mask_token_index(input_ids)
@@ -194,8 +184,8 @@ class PromptedClassificationReward(BaseReward):
 
     @torch.no_grad()
     def _get_logits(
-        self,
-        texts: List[str]
+            self,
+            texts: List[str]
     ) -> torch.Tensor:
         # for MLM, add mask token
         batch_size = len(texts)
@@ -216,14 +206,11 @@ class PromptedClassificationReward(BaseReward):
 
         return out_logits
 
-    def _convert_tokens_to_string(self, tokens: List[List[str]]) -> List[str]:
-        return [self._tokenizer.convert_tokens_to_string(s)
-                for s in tokens]
 
     def _format_prompts(
-        self,
-        source_strs: List[str],
-        prompt_strs: List[str],
+            self,
+            source_strs: List[str],
+            prompt_strs: List[str],
     ) -> List[str]:
         return [self.template.format(sentence_1=s_1, prompt=p)
                 for s_1, p in zip(source_strs, prompt_strs)]
