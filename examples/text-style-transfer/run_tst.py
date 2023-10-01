@@ -1,7 +1,5 @@
 import os
-import dataclasses
 import hydra
-from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig, OmegaConf
 
 from rlprompt.trainers import TrainerConfig, make_trainer

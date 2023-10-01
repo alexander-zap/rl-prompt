@@ -2,13 +2,12 @@ import os
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
+from rlprompt.trainers import TrainerConfig, make_trainer
+from rlprompt.modules import SQLModuleConfig, make_sql_module
 from rlprompt.models import (LMAdaptorModelConfig, SinglePromptModelConfig,
                              make_lm_adaptor_model, make_single_prompt_model)
-from rlprompt.modules import SQLModuleConfig, make_sql_module
-from rlprompt.trainers import TrainerConfig, make_trainer
 from rlprompt.utils.utils import (colorful_print, compose_hydra_config_store,
                                   get_hydra_output_dir)
-
 from fsc_helpers import (PromptedClassificationRewardConfig,
                          FewShotClassificationDatasetConfig,
                          make_prompted_classification_reward,
