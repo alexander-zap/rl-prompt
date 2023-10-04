@@ -75,60 +75,60 @@ class PromptedClassificationReward(BaseReward):
             target_labels: List[int],
             mode: str
     ) -> Tuple[Union[List[float], torch.Tensor], Dict[str, Any]]:
-        def log_metrics():
-            # Print examples
-            print_strs = [self._counter, '|', prompt, '\n']
-            for c in range(self.num_classes):
-                class_example_idx = np.where(np.array(target_labels) == c)[0][0]
-                class_example = formatted_templates[class_example_idx]
-                class_example_probs = class_probs[class_example_idx, :].tolist()
-                class_example_probs = [round(prob, 2) for prob in class_example_probs]
-                print_strs += ['Class', c, 'Example:',
-                               class_example, '|',
-                               'Probs:', class_example_probs, '\n']
-            print_strs += ['Accuracy:', acc.item(), '|',
-                           'Reward:', round(reward.item(), 2)]
-            print(*print_strs)
 
-        def _format_prompts(
-                source_strs: List[str],
-                prompt_strs: List[str],
-        ) -> List[str]:
-            return [self.template.format(sentence_1=s_1, prompt=p)
-                    for s_1, p in zip(source_strs, prompt_strs)]
+        def compute_reward(prompt, source, label):
+            @torch.no_grad()
+            def get_logits(texts: List[str]) -> torch.Tensor:
+                # Adapted from
+                # https://huggingface.co/docs/transformers/v4.21.1/en/task_summary#masked-language-modeling
+                def _get_mask_token_index(input_ids: torch.Tensor) -> torch.Tensor:
+                    mask_token_index = torch.where(
+                        input_ids == self._tokenizer.mask_token_id)[1]
+                    return mask_token_index
 
-        @torch.no_grad()
-        def _get_logits(texts: List[str]) -> torch.Tensor:
-            # Adapted from
-            # https://huggingface.co/docs/transformers/v4.21.1/en/task_summary#masked-language-modeling
-            def _get_mask_token_index(input_ids: torch.Tensor) -> torch.Tensor:
-                mask_token_index = torch.where(
-                    input_ids == self._tokenizer.mask_token_id)[1]
-                return mask_token_index
+                # for MLM, add mask token
+                batch_size = len(texts)
+                encoded_inputs = self._tokenizer(texts, padding='longest',
+                                                 truncation=True, return_tensors="pt",
+                                                 add_special_tokens=True)
 
-            # for MLM, add mask token
-            batch_size = len(texts)
-            encoded_inputs = self._tokenizer(texts, padding='longest',
-                                             truncation=True, return_tensors="pt",
-                                             add_special_tokens=True)
+                if self.is_mask_lm:
+                    token_logits = self._generator(**encoded_inputs.to(self.device)).logits
+                    mask_token_indices = _get_mask_token_index(encoded_inputs['input_ids'])
+                    out_logits = token_logits[range(batch_size), mask_token_indices, :]
+                else:
+                    token_logits = self._generator(**encoded_inputs.to(self.device)).logits
+                    input_lengths = encoded_inputs['attention_mask'].sum(dim=1)
+                    out_logits = token_logits[range(batch_size), input_lengths - 1, :]
 
-            if self.is_mask_lm:
-                token_logits = self._generator(**encoded_inputs.to(self.device)).logits
-                mask_token_indices = _get_mask_token_index(encoded_inputs['input_ids'])
-                out_logits = token_logits[range(batch_size), mask_token_indices, :]
-            else:
-                token_logits = self._generator(**encoded_inputs.to(self.device)).logits
-                input_lengths = encoded_inputs['attention_mask'].sum(dim=1)
-                out_logits = token_logits[range(batch_size), input_lengths - 1, :]
+                return out_logits
 
-            return out_logits
+            def format_prompts(
+                    source_strs: List[str],
+                    prompt_strs: List[str],
+            ) -> List[str]:
+                return [self.template.format(sentence_1=s_1, prompt=p)
+                        for s_1, p in zip(source_strs, prompt_strs)]
 
-        rewards = []
-        for _, prompt in enumerate(prompt_strings):
+            def log_metrics():
+                # Print examples
+                print_strs = [self._counter, '|', prompt_string, '\n']
+                for c in range(self.num_classes):
+                    class_example_idx = np.where(np.array(target_labels) == c)[0][0]
+                    class_example = formatted_templates[class_example_idx]
+                    class_example_probs = class_probs[class_example_idx, :].tolist()
+                    class_example_probs = [round(prob, 2) for prob in class_example_probs]
+                    print_strs += ['Class', c, 'Example:',
+                                   class_example, '|',
+                                   'Probs:', class_example_probs, '\n']
+                print_strs += ['Accuracy:', acc.item(), '|',
+                               'Reward:', round(averaged_gap_reward.item(), 2)]
+                print(*print_strs)
+
             # Compute LM logits
-            current_prompts = [prompt for _ in source_texts]
-            formatted_templates = _format_prompts(source_texts, current_prompts)
-            all_logits = _get_logits(formatted_templates)
+            current_prompts = [prompt] * len(source_texts)
+            formatted_templates = format_prompts(source_texts, current_prompts)
+            all_logits = get_logits(formatted_templates)
             # [batch_size, vocab_size]
             class_probs = torch.softmax(all_logits[:, self.verbalizer_ids], -1)
             # [batch_size, num_classes]
@@ -152,19 +152,23 @@ class PromptedClassificationReward(BaseReward):
             acc = correct.float().mean()
 
             gap_rewards = gap * (self.correct_coeff * correct + self.incorrect_coeff * (1 - correct))
-            reward = gap_rewards.mean().detach()
+            averaged_gap_reward = gap_rewards.mean().detach()
 
-            # keep track of rewards for z-score normalization
-            self.input_rewards_per_batch['z'].append(reward)
+            # keep track of rewards for z-score normalization ('z' is a hard-coded key)
+            self.input_rewards_per_batch['z'].append(averaged_gap_reward)
 
             log_metrics()
 
+            return averaged_gap_reward
+
+        rewards = []
+        for prompt_string, source_text, target_label in zip(prompt_strings, source_texts, target_labels):
+            reward = compute_reward(prompt_string, source_text, target_label)
             rewards.append(reward)
 
         rewards_tensor = torch.stack(rewards)
 
         if mode == "train" and self.compute_zscore:
-            print("Train")
             # 'z' because not dependent on source-strings (hard-coded key in reward computation)
             rewards_tensor = self.normalize_reward_scores(rewards_tensor, ['z'])
 
