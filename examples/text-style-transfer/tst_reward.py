@@ -53,44 +53,14 @@ class PromptedTextStyleTransferReward(BaseReward):
         # Misc. training details
         self.num_repeats = num_repeats
 
-    def forward(
+    def compute_rewards(
             self,
+            prompt_strings: List[str],
             source_texts: List[str],
             target_labels: List[str],
-            output_tokens: List[List[str]],
-            to_tensor: bool,
-            mode: str
+            mode: str,
+            *args, **kwargs
     ) -> Tuple[Union[List[float], torch.Tensor], Dict[str, Any]]:
-
-        def _repeat_texts(
-                texts: List[str],
-                num_repeats: Optional[int] = None
-        ) -> List[str]:
-            if num_repeats is None:
-                num_repeats = self.num_repeats
-            return list(itertools.chain(*[[s for _ in range(num_repeats)]
-                                          for s in texts]))
-
-        if mode == 'train':
-            source_strs = _repeat_texts(source_texts)
-            target_labels = _repeat_texts(target_labels)
-        else:  # mode == "infer":
-            source_strs = source_texts
-
-        prompt_strings = self.get_prompt_strings_from_output_tokens(output_tokens)
-
-        rewards = self.compute_rewards(prompt_strings, source_strs, target_labels)
-        self.rewards_per_batch.extend(rewards)
-
-        rewards_tensor = torch.stack(self.rewards_per_batch)
-
-        if mode == "train" and self.compute_zscore:
-            rewards_tensor = self.compute_reward_zscores(rewards_tensor,
-                                                         source_strs)
-
-        return rewards_tensor, dict()
-
-    def compute_rewards(self, prompts, source_strings, labels):
 
         def log_metrics():
             # Take the max of the sub-list rewards to print as example
@@ -136,14 +106,24 @@ class PromptedTextStyleTransferReward(BaseReward):
 
             return bootstrap_max_rewards
 
+        def _repeat_texts(
+                texts: List[str]
+        ) -> List[str]:
+            return list(itertools.chain(*[[s for _ in range(self.num_repeats)]
+                                          for s in texts]))
+
+        if mode == 'train':
+            source_texts = _repeat_texts(source_texts)
+            target_labels = _repeat_texts(target_labels)
+
         n_reward = self.num_samples
         k_reward = self.num_bootstraps
         num_samples = n_reward * k_reward
 
         rewards = []
-        for _, (prompt, src, label) in enumerate(zip(prompts,
-                                                     source_strings,
-                                                     labels)):
+        for _, (prompt, src, label) in enumerate(zip(prompt_strings,
+                                                     source_texts,
+                                                     target_labels)):
             hypos = self._generator.sample_generate(prompt, src, num_samples, self.top_k, self.top_p)
             sum_rewards, content_scores, style_probs = \
                 self.selector.compute_sample_rewards(src, hypos, label)
@@ -162,4 +142,9 @@ class PromptedTextStyleTransferReward(BaseReward):
 
             rewards.append(reward)
 
-        return rewards
+        rewards_tensor = torch.stack(rewards)
+
+        if mode == "train" and self.compute_zscore:
+            rewards_tensor = self.normalize_reward_scores(rewards_tensor, source_texts)
+
+        return rewards_tensor, dict()

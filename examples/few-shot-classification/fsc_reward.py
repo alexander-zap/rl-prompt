@@ -68,38 +68,28 @@ class PromptedClassificationReward(BaseReward):
         else:
             self.template = template
 
-    def forward(
+    def compute_rewards(
             self,
+            prompt_strings: List[str],
             source_texts: List[str],
             target_labels: List[int],
-            output_tokens: List[List[str]],
-            to_tensor: bool,
             mode: str
     ) -> Tuple[Union[List[float], torch.Tensor], Dict[str, Any]]:
+        def log_metrics():
+            # Print examples
+            print_strs = [self._counter, '|', prompt, '\n']
+            for c in range(self.num_classes):
+                class_example_idx = np.where(np.array(target_labels) == c)[0][0]
+                class_example = formatted_templates[class_example_idx]
+                class_example_probs = class_probs[class_example_idx, :].tolist()
+                class_example_probs = [round(prob, 2) for prob in class_example_probs]
+                print_strs += ['Class', c, 'Example:',
+                               class_example, '|',
+                               'Probs:', class_example_probs, '\n']
+            print_strs += ['Accuracy:', acc.item(), '|',
+                           'Reward:', round(reward.item(), 2)]
+            print(*print_strs)
 
-        prompt_strings = self.get_prompt_strings_from_output_tokens(output_tokens)
-
-        rewards = self.compute_rewards(prompt_strings=prompt_strings, source_texts=source_texts,
-                                       target_labels=target_labels)
-
-        self.rewards_per_batch.extend(rewards)
-
-        rewards_tensor = torch.stack(self.rewards_per_batch)
-
-        # z-score normalization (2nd stage)
-        if mode == 'train' and self.compute_zscore:
-            # 'z' because not source strings
-            rewards_tensor = self.compute_reward_zscores(rewards_tensor=rewards_tensor,
-                                                         input_texts=['z'])
-
-        elif mode == 'infer':  # Optional: Predict Val Prompts
-            score = rewards_tensor.mean().item()
-            print('Our Prompt:')
-            print(prompt_strings, score)
-
-        return rewards_tensor, dict()
-
-    def compute_rewards(self, prompt_strings, source_texts, target_labels):
         def _format_prompts(
                 source_strs: List[str],
                 prompt_strs: List[str],
@@ -167,18 +157,15 @@ class PromptedClassificationReward(BaseReward):
             # keep track of rewards for z-score normalization
             self.input_rewards_per_batch['z'].append(reward)
 
-            # Print examples
-            print_strs = [self._counter, '|', prompt, '\n']
-            for c in range(self.num_classes):
-                class_example_idx = np.where(np.array(target_labels) == c)[0][0]
-                class_example = formatted_templates[class_example_idx]
-                class_example_probs = class_probs[class_example_idx, :].tolist()
-                class_example_probs = [round(prob, 2) for prob in class_example_probs]
-                print_strs += ['Class', c, 'Example:',
-                               class_example, '|',
-                               'Probs:', class_example_probs, '\n']
-            print_strs += ['Accuracy:', acc.item(), '|',
-                           'Reward:', round(reward.item(), 2)]
-            print(*print_strs)
+            log_metrics()
 
-        return rewards
+            rewards.append(reward)
+
+        rewards_tensor = torch.stack(rewards)
+
+        if mode == "train" and self.compute_zscore:
+            print("Train")
+            # 'z' because not dependent on source-strings (hard-coded key in reward computation)
+            rewards_tensor = self.normalize_reward_scores(rewards_tensor, ['z'])
+
+        return rewards_tensor, dict()
