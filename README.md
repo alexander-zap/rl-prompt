@@ -1,5 +1,37 @@
 # RL Prompt
 
+### Installation
+
+To set up your local development environment, please use a fresh virtual environment (`python -m venv .venv`), then run:
+
+    pip install -r requirements.txt
+
+The command will install all requirements for the application.
+
+Additionally, please run the following script to download a pre-trained classification model for the text-style transfer use case:
+
+    python examples/text-style-transfer/scripts/download_tst_classifiers.py --model_name shakespeare-train-100-0
+
+### Running
+
+To run the few-shot classification use case, please run:
+
+    python examples/few-shot-classification/run_fsc.py
+
+To run the text-style transfer use case, please run:
+
+    python examples/text-style-transfer/run_tst.py
+
+## Contact
+
+Alexander Zap (alexander.zap@alexanderthamm.com)
+
+____
+
+# Original README
+
+# RL Prompt
+
 This repo contains the code of the discrete prompt optimization framework described in the paper \
 **[RLPrompt: Optimizing Discrete Text Prompts With Reinforcement Learning](https://arxiv.org/abs/2205.12548)** \
 Mingkai Deng*,   Jianyu Wang*,   Cheng-Ping Hsieh* (equal contribution),   Yihan Wang,   Han Guo,   Tianmin Shu,   Meng Song,   Eric P. Xing,   Zhiting Hu 
