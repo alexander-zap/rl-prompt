@@ -3,7 +3,7 @@ defaults:
   - base_tst
   - _self_
 # Data
-dataset: "<ENTER_DATASET_NAME_HERE>"
+dataset: "shakespeare"
 dataset_seed: 0
 direction: "0_to_1"
 # Reward
