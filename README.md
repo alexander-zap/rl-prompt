@@ -2,7 +2,11 @@
 
 ### Installation
 
-To set up your local development environment, please use a fresh virtual environment (`python -m venv .venv`), then run:
+To set up your local development environment, please create and use a fresh virtual environment for Python (tested with Python 3.9.12).
+
+    python -m venv .venv
+
+Then run:
 
     pip install -r requirements.txt
 
