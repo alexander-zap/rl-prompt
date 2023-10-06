@@ -6,21 +6,28 @@ To set up your local development environment, please use a fresh virtual environ
 
     pip install -r requirements.txt
 
+and 
+
+    pip install -e .
+
 The command will install all requirements for the application.
 
 Additionally, please run the following script to download a pre-trained classification model for the text-style transfer use case:
 
-    python examples/text-style-transfer/scripts/download_tst_classifiers.py --model_name shakespeare-train-100-0
+    cd examples/text-style-transfer
+    python scripts/download_tst_classifiers.py --model_name shakespeare-train-100-0
 
 ### Running
 
-To run the few-shot classification use case, please run:
+To run the few-shot classification use case, please run from the rl-prompt folder:
 
-    python examples/few-shot-classification/run_fsc.py
+    cd examples/few-shot-classification
+    python run_fsc.py
 
 To run the text-style transfer use case, please run:
 
-    python examples/text-style-transfer/run_tst.py
+    cd examples/text-style-transfer
+    python run_tst.py
 
 ## Contact
 
