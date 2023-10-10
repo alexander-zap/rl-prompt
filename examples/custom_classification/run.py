@@ -24,7 +24,7 @@ def main(config: "DictConfig"):
     output_dir = get_hydra_output_dir()
 
     #########################################################################################
-    # NOTE: Add your task and data here
+    # TODO: Add your task and data here
     train_dataset = PromptedClassificationDataset(
         ["Alexander", "Daniela", "Dieter", "Corinna", "Marius", "Michelle", "Rudi", "Ursula",
          "Siegfried", "Tina"],
@@ -34,6 +34,7 @@ def main(config: "DictConfig"):
     num_classes = 2
     # 0 == female name; 1 == male name
     verbalizers = ["female", "male"]
+    # NOTE: You can even include a self-written prompt before the {prompt} to kick-start performance
     template = "<mask> {prompt} {sentence_1}"
     #########################################################################################
 
